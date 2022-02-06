@@ -1,3 +1,5 @@
+[![main](https://github.com/konradasb/github_exporter/actions/workflows/main.yml/badge.svg?branch=master)](https://github.com/konradasb/github_exporter/actions/workflows/main.yml)
+
 # Github exporter for Prometheus
 
 This is a Github exporter for Prometheus metrics exposed by Github API. Written in Go with pluggable metrics collectors.
