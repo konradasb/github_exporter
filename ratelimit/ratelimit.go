@@ -17,7 +17,7 @@ const (
 	// DefaultRequestsPerSecond default value used for rate limiting RPS
 	defaultRequestsPerSecond = 50
 	// DefaultCacheExpiresTime default value for cache expires time
-	defaultCacheExpiresTime = 60 * time.Second
+	defaultCacheExpiresTime = 600 * time.Second
 	// DefaultCacheCleanupTime default value for cache cleanup time
 	defaultCacheCleanupTime = 60 * time.Second
 )
