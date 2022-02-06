@@ -51,7 +51,13 @@ func main() {
 		githubOrganizations string
 		githubRepositories  string
 		serverReadTimeout   time.Duration
+		serverIdleTimeout   time.Duration
 		serverWriteTimeout  time.Duration
+		cacheExpiresTime    time.Duration
+		cacheCleanupTIme    time.Duration
+		cacheEnabled        bool
+		ratelimitEnabled    bool
+		ratelimitRPS        int
 	}
 
 	opts := &options{}
@@ -64,12 +70,18 @@ func main() {
 	kingpin.Flag("web.version.path", "Path to HTTP version").Default("/version").Envar("WEB_VERSION_PATH").StringVar(&opts.webVersionPath)
 	kingpin.Flag("collectors", "List of enabled collectors").Default(defaultCollectors).Envar("COLLECTORS").StringVar(&opts.collectors)
 	kingpin.Flag("server.read-timeout", "Server read timeout duration").Default("30s").Envar("SERVER_READ_TIMEOUT").DurationVar(&opts.serverReadTimeout)
+	kingpin.Flag("server.idle-timeout", "Server idle timeout duration").Default("30s").Envar("SERVER_IDLE_TIMEOUT").DurationVar(&opts.serverIdleTimeout)
 	kingpin.Flag("server.write-timeout", "Server write timeout duration").Default("30s").Envar("SERVER_WRITE_TIMEOUT").DurationVar(&opts.serverWriteTimeout)
 	kingpin.Flag("github.organizations", "Github organizations to scrape").Default("").Envar("GITHUB_ORGANIZATIONS").StringVar(&opts.githubOrganizations)
 	kingpin.Flag("github.repositories", "Github repositories to scrape").Default("").Envar("GITHUB_REPOSITORIES").StringVar(&opts.githubRepositories)
 	kingpin.Flag("github.private-key", "Github App private key (required) (GITHUB_PRIVATE_KEY)").Required().Envar("GITHUB_PRIVATE_KEY").StringVar(&opts.githubPrivateyKey)
 	kingpin.Flag("github.app-id", "Github App application ID (required) (GITHUB_APP_ID)").Required().Envar("GITHUB_APP_ID").Int64Var(&opts.githubAppID)
 	kingpin.Flag("github.ins-id", "Github App instalation ID (required) (GITHUB_INS_ID)").Required().Envar("GITHUB_INS_ID").Int64Var(&opts.githubInsID)
+	kingpin.Flag("cache.expires-time", "Time interval after which cache expires").Default("5m").Envar("CACHE_EXPIRES_TIME").DurationVar(&opts.cacheExpiresTime)
+	kingpin.Flag("cache.cleanup-time", "Time interval after which cache cleanup").Default("1m").Envar("CACHE_CLEANUP_TIME").DurationVar(&opts.cacheCleanupTIme)
+	kingpin.Flag("cache.enabled", "Enables caching of requests responses").Default("true").Envar("CACHE_ENABLED").BoolVar(&opts.cacheEnabled)
+	kingpin.Flag("ratelimit.enabled", "Enables rate limiting of requests").Default("true").Envar("RATELIMIT_ENABLED").BoolVar(&opts.ratelimitEnabled)
+	kingpin.Flag("ratelimit.rps", "Maximum amount of requests/s").Default("50").Envar("RATELIMIT_RPS").IntVar(&opts.ratelimitRPS)
 
 	kingpin.HelpFlag.Short('h')
 	kingpin.Parse()
@@ -91,7 +103,15 @@ func main() {
 
 	client := github.NewClient(
 		&http.Client{
-			Transport: ratelimit.NewRatelimitTransport(transport),
+			Transport: ratelimit.NewTransport(
+				transport, &ratelimit.TransportOptions{
+					CacheExpiresTime: opts.cacheExpiresTime,
+					CacheCleanupTime: opts.cacheCleanupTIme,
+					CacheEnabled:     opts.cacheEnabled,
+					RatelimitEnabled: opts.ratelimitEnabled,
+					RatelimitRPS:     opts.ratelimitRPS,
+				},
+			),
 		},
 	)
 
@@ -139,8 +159,9 @@ func main() {
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf("%s:%s", opts.webListenHost, opts.webListenPort),
-		ReadTimeout:  opts.serverReadTimeout,
 		WriteTimeout: opts.serverWriteTimeout,
+		ReadTimeout:  opts.serverReadTimeout,
+		IdleTimeout:  opts.serverIdleTimeout,
 		Handler:      router,
 	}
 

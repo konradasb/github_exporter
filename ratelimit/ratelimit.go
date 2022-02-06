@@ -22,76 +22,96 @@ const (
 	defaultCacheCleanupTime = 60 * time.Second
 )
 
-// RatelimitTransportOption option for RateLimitTransport
-type RatelimitTransportOption func(*ratelimitTransport)
+// TransportOptions are options for Transport
+type TransportOptions struct {
+	RatelimitEnabled bool
+	RatelimitRPS     int
+	CacheExpiresTime time.Duration
+	CacheCleanupTime time.Duration
+	CacheEnabled     bool
+}
 
-type ratelimitTransport struct {
-	next  http.RoundTripper
-	rtl   ratelimit.Limiter
+// Transport implements http.RoundTripper
+//
+// It serves as a wrapper for requests, which implements caching
+// of responses and rate limiting total amount of requests/s
+type Transport struct {
+	Next    http.RoundTripper
+	Options *TransportOptions
+
 	cache *cache.Cache
+	rtl   ratelimit.Limiter
 }
 
 // NewRatelimitTransport initializes a new *ratelimitTransport instance
-func NewRatelimitTransport(next http.RoundTripper, opts ...RatelimitTransportOption) *ratelimitTransport {
-	t := &ratelimitTransport{
-		cache: cache.New(defaultCacheExpiresTime, defaultCacheCleanupTime),
-		rtl:   ratelimit.New(defaultRequestsPerSecond),
-		next:  next,
+func NewTransport(next http.RoundTripper, options *TransportOptions) *Transport {
+	t := &Transport{}
+
+	if options == nil {
+		options = &TransportOptions{
+			RatelimitRPS:     defaultRequestsPerSecond,
+			RatelimitEnabled: true,
+			CacheExpiresTime: defaultCacheExpiresTime,
+			CacheCleanupTime: defaultCacheCleanupTime,
+			CacheEnabled:     true,
+		}
+	}
+	t.Options = options
+
+	if next == nil {
+		next = http.DefaultTransport
+	}
+	t.Next = next
+
+	if options.CacheEnabled {
+		t.cache = cache.New(t.Options.CacheExpiresTime, t.Options.CacheCleanupTime)
 	}
 
-	for _, opt := range opts {
-		opt(t)
+	if options.RatelimitEnabled {
+		t.rtl = ratelimit.New(t.Options.RatelimitRPS)
 	}
 
 	return t
 }
 
-// WithCache allows to specify cache instance for *ratelimitTransport
-func WithCache(cache *cache.Cache) RatelimitTransportOption {
-	return func(rt *ratelimitTransport) {
-		rt.cache = cache
-	}
-}
-
-// WithLimiter allows to specify limiter instance for *ratelimitTransport
-func WithLimiter(rtl ratelimit.Limiter) RatelimitTransportOption {
-	return func(rt *ratelimitTransport) {
-		rt.rtl = rtl
-	}
-}
-
 // RoundTrip implements http.RoundTripper
-func (t *ratelimitTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	cache, _ := t.cache.Get(req.URL.String())
-	if cache != nil {
-		buf := bytes.NewBuffer(cache.([]byte))
-		return http.ReadResponse(bufio.NewReader(buf), nil)
+func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.Options.CacheEnabled {
+		cache, _ := t.cache.Get(req.URL.String())
+		if cache != nil {
+			buf := bytes.NewBuffer(cache.([]byte))
+			return http.ReadResponse(bufio.NewReader(buf), nil)
+		}
 	}
 
-	t.rtl.Take()
+	if t.Options.RatelimitEnabled {
+		t.rtl.Take()
+	}
 
-	resp, err := t.next.RoundTrip(req)
+	resp, err := t.Next.RoundTrip(req)
 	if err != nil {
 		return resp, err
 	}
 
-	buf, err := httputil.DumpResponse(resp, true)
-	if err != nil {
-		return resp, err
-	}
+	if t.Options.CacheEnabled {
+		buf, err := httputil.DumpResponse(resp, true)
+		if err != nil {
+			return resp, err
+		}
 
-	t.cache.Set(req.URL.String(), buf, 0)
+		t.cache.Set(req.URL.String(), buf, 0)
+	}
 
 	err = github.CheckResponse(resp)
 	switch e := err.(type) {
 	case *github.AbuseRateLimitError:
 		log.Printf("[DEBUG>ABUSERATELIMIT] Sleeping %s before performing other requests", e.GetRetryAfter())
 		time.Sleep(e.GetRetryAfter())
-		return t.next.RoundTrip(req)
+		return t.Next.RoundTrip(req)
 	case *github.RateLimitError:
 		log.Printf("[DEBUG>RATELIMIT] Sleeping %s before performing other requests", time.Until(e.Rate.Reset.Time))
 		time.Sleep(time.Until(e.Rate.Reset.Time))
-		return t.next.RoundTrip(req)
+		return t.Next.RoundTrip(req)
 	}
 
 	return resp, nil
