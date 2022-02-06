@@ -14,8 +14,8 @@ import (
 )
 
 var (
-	actionsOrganizations = kingpin.Flag("collector.actions.organizations", "Github organizations to scrape (Actions service)").Default("").String()
-	actionsRepositories  = kingpin.Flag("collector.actions.repositories", "Github repositories to scrape (Actions service)").Default("").String()
+	actionsOrganizations = kingpin.Flag("collector.actions.organizations", "Github organizations to scrape (Actions service)").Default("").Envar("COLLECTOR_ACTIONS_ORGANIZATIONS").String()
+	actionsRepositories  = kingpin.Flag("collector.actions.repositories", "Github repositories to scrape (Actions service)").Default("").Envar("COLLECTOR_ACTIONS_REPOSITORIES").String()
 )
 
 type actionsCollector struct {
