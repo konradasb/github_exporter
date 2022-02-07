@@ -13,6 +13,7 @@ import (
 	"github.com/bradleyfalzon/ghinstallation"
 	"github.com/google/go-github/v42/github"
 	"github.com/gorilla/mux"
+	"github.com/konradasb/github_exporter/build"
 	"github.com/konradasb/github_exporter/collectors"
 	"github.com/konradasb/github_exporter/log"
 	"github.com/konradasb/github_exporter/transport"
@@ -130,12 +131,12 @@ func main() {
 	)
 	router.Handle(opts.webHealthzPath, http.HandlerFunc(
 		func(rw http.ResponseWriter, _ *http.Request) {
-			fmt.Fprintf(rw, "OK")
+			fmt.Fprint(rw, "OK")
 		}),
 	)
 	router.Handle(opts.webVersionPath, http.HandlerFunc(
 		func(rw http.ResponseWriter, _ *http.Request) {
-			fmt.Fprintf(rw, "1.0.0")
+			fmt.Fprint(rw, build.String())
 		}),
 	)
 
