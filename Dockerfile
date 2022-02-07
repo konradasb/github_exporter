@@ -5,6 +5,7 @@ ARG GITHUB_PRIVATE_KEY="" \
     GITHUB_INS_ID=""
 
 ENV GO111MODULE=on \
+    CGO_ENABLED=0 \
     GOARCH=amd64 \
     GOOS=linux
 
@@ -24,7 +25,13 @@ COPY . .
 
 RUN go build -o github_exporter .
 
-FROM golang:1.17
+RUN apt update && apt install xz-utils -y && \
+    strip /build/github_exporter && \
+    wget https://github.com/upx/upx/releases/download/v3.96/upx-3.96-amd64_linux.tar.xz && \
+    tar xf upx-3.96-amd64_linux.tar.xz && \
+    ./upx-3.96-amd64_linux/upx /build/github_exporter
+
+FROM alpine:3
 
 COPY --from=build /etc/passwd /etc/passwd
 COPY --from=build /etc/group /etc/group

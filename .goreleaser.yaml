@@ -3,17 +3,39 @@ before:
   hooks:
     - go mod tidy
 builds:
-  - env:
+  - id: linux-amd64
+    targets:
+      - linux_amd64
+    env:
       - CGO_ENABLED=0
     goos:
       - linux
     goarch:
       - amd64
+    ldflags:
+      - -X github.com/konradasb/github_exporter/build.Revision={{ .ShortCommit }}
+      - -X github.com/konradasb/github_exporter/build.Date={{ .CommitDate }}
+      - -X github.com/konradasb/github_exporter/build.Version={{ .Version }}
+    hooks:
+      post:
+        - strip {{ .Path }}
+        - upx {{ .Path }}
+  - id: linux-arm64
+    targets:
+      - linux_arm64
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
       - arm64
     ldflags:
       - -X github.com/konradasb/github_exporter/build.Revision={{ .ShortCommit }}
       - -X github.com/konradasb/github_exporter/build.Date={{ .CommitDate }}
       - -X github.com/konradasb/github_exporter/build.Version={{ .Version }}
+    hooks:
+      post:
+        - upx {{ .Path }}
 archives:
   - replacements:
       darwin: Darwin
