@@ -69,9 +69,10 @@ Adjust `scrape_interval` and `scrape_timeout` as needed. It might not be the rig
 
 List of collectors, descriptions and wether they are enabled by default
 
-  Name  |             Description              | Enabled
---------|--------------------------------------|----------
-actions | collector for Github Actions service | true
+  Name    |             Description              | Enabled
+----------|--------------------------------------|----------
+actions   | collector for Github Actions service | true
+ratelimit | collector for Github ratelimits      | true
 
 ## Development
 
