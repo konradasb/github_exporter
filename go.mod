@@ -6,7 +6,6 @@ require (
 	github.com/bradleyfalzon/ghinstallation v1.1.1
 	github.com/google/go-github/v42 v42.0.0
 	github.com/gorilla/mux v1.8.0
-	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.12.1
 	go.uber.org/ratelimit v0.2.0

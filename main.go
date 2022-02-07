@@ -15,7 +15,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/konradasb/github_exporter/collectors"
 	"github.com/konradasb/github_exporter/log"
-	"github.com/konradasb/github_exporter/ratelimit"
+	"github.com/konradasb/github_exporter/transport"
 	metrics "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
@@ -33,7 +33,7 @@ const (
 	defaultWebListenPort = "9024"
 
 	// defaultCollectors defines the deault enabled collectors
-	defaultCollectors = "actions"
+	defaultCollectors = "actions,ratelimit"
 )
 
 func main() {
@@ -53,11 +53,6 @@ func main() {
 		serverReadTimeout   time.Duration
 		serverIdleTimeout   time.Duration
 		serverWriteTimeout  time.Duration
-		cacheExpiresTime    time.Duration
-		cacheCleanupTIme    time.Duration
-		cacheEnabled        bool
-		ratelimitEnabled    bool
-		ratelimitRPS        int
 	}
 
 	opts := &options{}
@@ -77,11 +72,6 @@ func main() {
 	kingpin.Flag("github.private-key", "Github App private key (required) (GITHUB_PRIVATE_KEY)").Required().Envar("GITHUB_PRIVATE_KEY").StringVar(&opts.githubPrivateyKey)
 	kingpin.Flag("github.app-id", "Github App application ID (required) (GITHUB_APP_ID)").Required().Envar("GITHUB_APP_ID").Int64Var(&opts.githubAppID)
 	kingpin.Flag("github.ins-id", "Github App instalation ID (required) (GITHUB_INS_ID)").Required().Envar("GITHUB_INS_ID").Int64Var(&opts.githubInsID)
-	kingpin.Flag("cache.expires-time", "Time interval after which cache expires").Default("5m").Envar("CACHE_EXPIRES_TIME").DurationVar(&opts.cacheExpiresTime)
-	kingpin.Flag("cache.cleanup-time", "Time interval after which cache cleanup").Default("1m").Envar("CACHE_CLEANUP_TIME").DurationVar(&opts.cacheCleanupTIme)
-	kingpin.Flag("cache.enabled", "Enables caching of requests responses").Default("true").Envar("CACHE_ENABLED").BoolVar(&opts.cacheEnabled)
-	kingpin.Flag("ratelimit.enabled", "Enables rate limiting of requests").Default("true").Envar("RATELIMIT_ENABLED").BoolVar(&opts.ratelimitEnabled)
-	kingpin.Flag("ratelimit.rps", "Maximum amount of requests/s").Default("50").Envar("RATELIMIT_RPS").IntVar(&opts.ratelimitRPS)
 
 	kingpin.HelpFlag.Short('h')
 	kingpin.Parse()
@@ -92,7 +82,7 @@ func main() {
 		return
 	}
 
-	transport, err := ghinstallation.New(
+	rt, err := ghinstallation.New(
 		http.DefaultTransport, opts.githubAppID, opts.githubInsID,
 		[]byte(opts.githubPrivateyKey),
 	)
@@ -103,15 +93,7 @@ func main() {
 
 	client := github.NewClient(
 		&http.Client{
-			Transport: ratelimit.NewTransport(
-				transport, &ratelimit.TransportOptions{
-					CacheExpiresTime: opts.cacheExpiresTime,
-					CacheCleanupTime: opts.cacheCleanupTIme,
-					CacheEnabled:     opts.cacheEnabled,
-					RatelimitEnabled: opts.ratelimitEnabled,
-					RatelimitRPS:     opts.ratelimitRPS,
-				},
-			),
+			Transport: transport.NewTransport(rt, nil),
 		},
 	)
 

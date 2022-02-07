@@ -84,13 +84,6 @@ func newActionsCollector(client *github.Client, logger *zap.Logger) (Collector, 
 		wg:                 &sync.WaitGroup{},
 	}
 
-	c.logger.Info(
-		"registered and started collector",
-		zap.String("organizations", c.organizations),
-		zap.String("repositories", c.repositories),
-		zap.String("collector", "actions"),
-	)
-
 	return c, nil
 }
 
