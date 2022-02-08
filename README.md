@@ -27,7 +27,7 @@ export GH_PRIVATE_KEY=""
 export GH_APP_ID=""
 export GH_INS_ID=""
 
-./exporter --help
+./github_exporter --help
 Prometheus exporter for Github metrics.
 Written in Go, with love ❤️
 
