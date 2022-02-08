@@ -18,12 +18,6 @@ func CloneRequest(r *http.Request) *http.Request {
 	return r2
 }
 
-// IsRequestCacheable returns true if the request is cacheable,
-// false otherwise
-func IsRequestCacheable(req *http.Request) bool {
-	return (req.Method == "GET" || req.Method == "HEAD")
-}
-
 // DrainBody reads all of 'b' to memory and returns two equivalent
 // ReadCloser instances with the same number of bytes
 func DrainBody(b io.ReadCloser) (r1, r2 io.ReadCloser, err error) {

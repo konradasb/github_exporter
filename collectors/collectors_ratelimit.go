@@ -5,36 +5,33 @@ import (
 
 	"github.com/google/go-github/v42/github"
 	metrics "github.com/prometheus/client_golang/prometheus"
-	"go.uber.org/zap"
 )
 
 type ratelimitCollector struct {
 	limitRemaining *metrics.Desc
 	limitTotal     *metrics.Desc
 
-	logger *zap.Logger
 	client *github.Client
 }
 
-func newRatelimitCollector(client *github.Client, logger *zap.Logger) (Collector, error) {
+func newRatelimitCollector(client *github.Client) (Collector, error) {
 	c := &ratelimitCollector{
 		limitRemaining: metrics.NewDesc(
 			metrics.BuildFQName(defaultNamespace, "ratelimit", "limit_remaining"),
-			"Total amount limit of requests", []string{"resource"}, nil,
+			"Total amount of requests remaining", []string{"resource"}, nil,
 		),
 		limitTotal: metrics.NewDesc(
 			metrics.BuildFQName(defaultNamespace, "ratelimit", "limit_total"),
-			"Total amount of requests remaining", []string{"resource"}, nil,
+			"Total amount of requests", []string{"resource"}, nil,
 		),
-		logger: logger,
 		client: client,
 	}
 
 	return c, nil
 }
 
-func (c *ratelimitCollector) Update(ch chan<- metrics.Metric) error {
-	results, _, err := c.client.RateLimits(context.Background())
+func (c *ratelimitCollector) Update(ctx context.Context, ch chan<- metrics.Metric) error {
+	results, _, err := c.client.RateLimits(ctx)
 	if err != nil {
 		return err
 	}
@@ -48,5 +45,5 @@ func (c *ratelimitCollector) Update(ch chan<- metrics.Metric) error {
 }
 
 func init() {
-	registerCollector("ratelimit", newRatelimitCollector)
+	registerCollector("ratelimit", true, newRatelimitCollector)
 }

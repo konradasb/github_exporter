@@ -7,37 +7,39 @@ import (
 	"github.com/google/go-github/v42/github"
 )
 
-// RatelimitTransport implements http.RoundTripper
-type RatelimitTransport struct {
-	Next    http.RoundTripper
-	Options *RatelimitTransportOpts
+type ratelimitTransport struct {
+	Next http.RoundTripper
 }
 
-// RatelimitTransportOpts are options for RatelimitTransport
-type RatelimitTransportOpts struct{}
-
-// NewRatelimitTransport initializes a new *RatelimitTransport instance
-func NewRatelimitTransport(next http.RoundTripper, opts *RatelimitTransportOpts) *RatelimitTransport {
-	if opts == nil {
-		opts = &RatelimitTransportOpts{}
+// NewRatelimitTransport creates a new RatelimitTransport instance
+//
+// RatelimitTransport is responsible for checking responses from
+// requests for any Github related ratelimit errors
+//
+// Upon ratelimit error, the request is retried after the
+// recommend time by Github
+//
+// This only considers Github API secondary limits, also considered
+// as abuse rate limits
+func NewRatelimitTransport(rt http.RoundTripper) *ratelimitTransport {
+	if rt == nil {
+		rt = http.DefaultTransport
 	}
 
-	t := &RatelimitTransport{
-		Next:    next,
-		Options: opts,
+	t := &ratelimitTransport{
+		Next: rt,
 	}
 
 	return t
 }
 
 // RoundTrip implements http.RoundTripper
-func (t *RatelimitTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+func (t *ratelimitTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := t.Next.RoundTrip(req)
 	if err != nil {
 		return resp, err
 	}
 
-	// Bug: https://github.com/google/go-github/pull/986
 	r1, r2, err := DrainBody(resp.Body)
 	if err != nil {
 		return nil, err
@@ -46,13 +48,12 @@ func (t *RatelimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 	err = github.CheckResponse(resp)
 	resp.Body = r2
 
-	switch e := err.(type) {
-	case *github.AbuseRateLimitError:
-		time.Sleep(e.GetRetryAfter())
-		return t.Next.RoundTrip(req)
-	case *github.RateLimitError:
-		time.Sleep(time.Until(e.Rate.Reset.Time))
-		return t.Next.RoundTrip(req)
+	if err != nil {
+		e, ok := err.(*github.AbuseRateLimitError)
+		if ok {
+			<-time.After(e.GetRetryAfter())
+			return t.RoundTrip(req)
+		}
 	}
 
 	return resp, nil
