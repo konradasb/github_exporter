@@ -1,12 +1,27 @@
 package cache
 
-// A Cache interface is used by the CacheTransport to store and retrieve responses.
+import (
+	"time"
+)
+
+// Cache stores, retrieves and deletes cacheable items
 type Cache interface {
-	// Get returns the []byte representation of a cached response and a bool
-	// set to true if the value isn't empty
-	Get(key string) (responseBytes []byte, ok bool)
-	// Set stores the []byte representation of a response against a key
-	Set(key string, responseBytes []byte)
-	// Delete removes the value associated with the key
-	Delete(key string)
+	Get(k string) *Item
+	Set(k string, x interface{})
+	Delete(k string)
+}
+
+// Item is an object which is stored in Cache
+type Item struct {
+	Object interface{}
+	Age    int64
+}
+
+// Get age returns the age of the cached object
+func (i *Item) GetAge() time.Duration {
+	return time.Since(time.Unix(0, i.Age))
+}
+
+func (i *Item) RefreshAge() {
+	i.Age = time.Now().UnixNano()
 }

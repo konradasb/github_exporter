@@ -1,39 +1,55 @@
 package cache
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 
-// MemoryCache is an implemtation of Cache that stores responses in an in-memory map.
+// MemoryCache is an implemtation of Cache that will store items in an in-memory map
 type MemoryCache struct {
-	mu    sync.RWMutex
-	items map[string][]byte
+	mu    *sync.RWMutex
+	items map[string]*Item
 }
 
-// Get returns the []byte representation of the response and true if present, false if not
-func (c *MemoryCache) Get(key string) (resp []byte, ok bool) {
+// Get returns an item from cache
+func (c *MemoryCache) Get(k string) *Item {
 	c.mu.RLock()
-	resp, ok = c.items[key]
+	item, ok := c.items[k]
 	c.mu.RUnlock()
-	return resp, ok
+	if !ok {
+		return nil
+	}
+	return item
 }
 
-// Set saves response resp to the cache with key
-func (c *MemoryCache) Set(key string, resp []byte) {
+// Set stores an item to cache
+func (c *MemoryCache) Set(k string, x interface{}) {
 	c.mu.Lock()
-	c.items[key] = resp
+	c.items[k] = &Item{Object: x, Age: time.Now().UnixNano()}
 	c.mu.Unlock()
 }
 
-// Delete removes key from the cache
-func (c *MemoryCache) Delete(key string) {
+// Delete removes an item from cache
+func (c *MemoryCache) Delete(k string) {
 	c.mu.Lock()
-	delete(c.items, key)
+	delete(c.items, k)
+	c.mu.Unlock()
+}
+
+func (c *MemoryCache) Refresh(k string) {
+	c.mu.Lock()
+	item, ok := c.items[k]
+	if ok {
+		item.RefreshAge()
+	}
 	c.mu.Unlock()
 }
 
 // NewMemoryCache returns a new Cache that will store items in an in-memory map
 func NewMemoryCache() *MemoryCache {
 	c := &MemoryCache{
-		items: map[string][]byte{},
+		items: make(map[string]*Item),
+		mu:    &sync.RWMutex{},
 	}
 
 	return c

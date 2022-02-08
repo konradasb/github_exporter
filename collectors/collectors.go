@@ -1,12 +1,15 @@
 package collectors
 
 import (
+	"context"
 	"log"
 	"sync"
 	"time"
 
 	"github.com/google/go-github/v42/github"
+	"github.com/pkg/errors"
 	metrics "github.com/prometheus/client_golang/prometheus"
+	"github.com/spf13/viper"
 	"go.uber.org/zap"
 )
 
@@ -15,25 +18,29 @@ const (
 )
 
 // CollectorFactory is a common function for creating new Collectors
-type CollectorFactory func(client *github.Client, logger *zap.Logger) (Collector, error)
+type CollectorFactory func(client *github.Client) (Collector, error)
 
 var (
+	Collectors         = make([]string, 0)
 	collectorFactories = make(map[string]CollectorFactory)
 )
 
 // Collector collects Prometheus metrics
 type Collector interface {
 	// Update collects Prometheus metrics of collector
-	Update(ch chan<- metrics.Metric) error
+	Update(ctx context.Context, ch chan<- metrics.Metric) error
 }
 
-func registerCollector(name string, factory CollectorFactory) {
+func registerCollector(name string, enabled bool, factory CollectorFactory) {
 	_, ok := collectorFactories[name]
 	if ok {
 		log.Fatalf("collector '%v' is already registered", name)
 		return
 	}
 	collectorFactories[name] = factory
+	if enabled {
+		Collectors = append(Collectors, name)
+	}
 }
 
 // GithubCollector is the main collector which collects Prometheus metrics
@@ -48,13 +55,6 @@ type GithubCollector struct {
 	logger *zap.Logger
 	wg     *sync.WaitGroup
 	mu     *sync.Mutex
-}
-
-type GithubCollectorOpts struct {
-	Client        *github.Client
-	Logger        *zap.Logger
-	Organizations []string
-	Repositories  []string
 }
 
 // NewGithubCollector initializes a new *GithubCollector instance
@@ -82,12 +82,20 @@ func NewGithubCollector(client *github.Client, logger *zap.Logger) (*GithubColle
 		mu:                 &sync.Mutex{},
 	}
 
-	for name, collector := range collectorFactories {
-		result, err := collector(client, logger)
-		if err != nil {
-			return nil, err
+	for _, name := range viper.GetStringSlice("collectors") {
+		collectorFn, ok := collectorFactories[name]
+		if !ok {
+			logger.Info(
+				"collector is not implemented or registed, ignoring",
+				zap.String("collector", name),
+			)
+			continue
 		}
-		c.Collectors[name] = result
+		collector, err := collectorFn(client)
+		if err != nil {
+			return nil, errors.Wrap(err, "error creating collector")
+		}
+		c.Collectors[name] = collector
 	}
 
 	return c, nil
@@ -101,32 +109,59 @@ func (c *GithubCollector) Describe(ch chan<- *metrics.Desc) {
 
 // Collect implements Prometheus Collector interface
 func (c *GithubCollector) Collect(ch chan<- metrics.Metric) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	for name := range c.Collectors {
 		c.wg.Add(1)
 		go func(name string) {
-			c.collect(name, ch)
-			c.wg.Done()
+			c.collect(ctx, name, ch)
 		}(name)
 	}
+
 	c.wg.Wait()
 }
 
-func (c *GithubCollector) collect(collector string, ch chan<- metrics.Metric) {
+func (c *GithubCollector) collect(ctx context.Context, collector string, ch chan<- metrics.Metric) {
 	now := time.Now()
-	err := c.Collectors[collector].Update(ch)
-	ch <- metrics.MustNewConstMetric(c.scrapeDurationDesc, metrics.GaugeValue, float64(time.Since(now).Seconds()), collector)
-	if err != nil {
-		c.logger.Error(
-			"collector scrape error",
+
+	done := make(chan error, 1)
+	go func() {
+		err := c.Collectors[collector].Update(ctx, ch)
+		done <- err
+	}()
+
+	success := 1.0
+	select {
+	case err := <-done:
+		if err != nil {
+			success = 0
+			c.logger.Error(
+				"collector scrape failure",
+				zap.String("collector", collector),
+				zap.String("took", time.Since(now).String()),
+				zap.Error(err),
+			)
+		}
+	case <-ctx.Done():
+		success = 0
+		c.logger.Debug(
+			"collector scrape timeout",
 			zap.String("collector", collector),
-			zap.Error(err),
+			zap.String("took", time.Since(now).String()),
 		)
-		ch <- metrics.MustNewConstMetric(c.scrapeSuccessDesc, metrics.GaugeValue, 0, collector)
-		return
 	}
-	c.logger.Debug(
-		"collector scrape successfull",
-		zap.String("collector", collector),
-	)
-	ch <- metrics.MustNewConstMetric(c.scrapeSuccessDesc, metrics.GaugeValue, 1, collector)
+
+	if success == 1.0 {
+		c.logger.Debug(
+			"collector scrape successfull",
+			zap.String("collector", collector),
+			zap.String("took", time.Since(now).String()),
+		)
+	}
+
+	ch <- metrics.MustNewConstMetric(c.scrapeSuccessDesc, metrics.GaugeValue, success, collector)
+	ch <- metrics.MustNewConstMetric(c.scrapeDurationDesc, metrics.GaugeValue, float64(time.Since(now).Seconds()), collector)
+
+	c.wg.Done()
 }

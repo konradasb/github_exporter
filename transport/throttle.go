@@ -6,31 +6,26 @@ import (
 	"go.uber.org/ratelimit"
 )
 
-// ThrottleTransportOptions are options for ThrottleTransport
-type ThrottleTransportOptions struct {
-	RequestsPerSecond int
-}
-
-// ThrottleTransport implements http.RoundTripper
-type ThrottleTransport struct {
+type throttleTransport struct {
 	Next    http.RoundTripper
-	Opts    *ThrottleTransportOptions
 	Limiter ratelimit.Limiter
 }
 
-// NewThrottleTransport initializes a new *ThrottleTransport instance
-func NewThrottleTransport(next http.RoundTripper, opts *ThrottleTransportOptions) *ThrottleTransport {
-	if opts == nil {
-		opts = &ThrottleTransportOptions{
-			RequestsPerSecond: 100,
-		}
+// NewThrottleTransport creates a new ThrottleTransport instance
+//
+// ThrottleTransport is responsible for throttling requests to the
+// configured amount of requests/s
+func NewThrottleTransport(rt http.RoundTripper, rtl ratelimit.Limiter) *throttleTransport {
+	if rt == nil {
+		rt = http.DefaultTransport
 	}
 
-	rtl := ratelimit.New(opts.RequestsPerSecond)
+	if rtl == nil {
+		rtl = ratelimit.New(100)
+	}
 
-	t := &ThrottleTransport{
-		Opts:    opts,
-		Next:    next,
+	t := &throttleTransport{
+		Next:    rt,
 		Limiter: rtl,
 	}
 
@@ -38,7 +33,7 @@ func NewThrottleTransport(next http.RoundTripper, opts *ThrottleTransportOptions
 }
 
 // RoundTrip implements http.RoundTripper
-func (t *ThrottleTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+func (t *throttleTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	t.Limiter.Take()
 
 	return t.Next.RoundTrip(req)

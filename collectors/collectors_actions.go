@@ -2,20 +2,17 @@ package collectors
 
 import (
 	"context"
-	"fmt"
 	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/google/go-github/v42/github"
 	metrics "github.com/prometheus/client_golang/prometheus"
-	"go.uber.org/zap"
-	"gopkg.in/alecthomas/kingpin.v2"
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
 )
 
 var (
-	actionsOrganizations = kingpin.Flag("collector.actions.organizations", "Github organizations to scrape (Actions service)").Default("").Envar("COLLECTOR_ACTIONS_ORGANIZATIONS").String()
-	actionsRepositories  = kingpin.Flag("collector.actions.repositories", "Github repositories to scrape (Actions service)").Default("").Envar("COLLECTOR_ACTIONS_REPOSITORIES").String()
+	ActionsFlagset = pflag.NewFlagSet("actions", pflag.ExitOnError)
 )
 
 type actionsCollector struct {
@@ -25,16 +22,12 @@ type actionsCollector struct {
 	workflowStatus     *metrics.Desc
 	workflowRunsStatus *metrics.Desc
 
-	logger *zap.Logger
 	client *github.Client
-
-	organizations string
-	repositories  string
 
 	wg *sync.WaitGroup
 }
 
-func newActionsCollector(client *github.Client, logger *zap.Logger) (Collector, error) {
+func newActionsCollector(client *github.Client) (Collector, error) {
 	runnersStatus := metrics.NewDesc(
 		metrics.BuildFQName(
 			defaultNamespace, "actions", "runners_status",
@@ -77,9 +70,6 @@ func newActionsCollector(client *github.Client, logger *zap.Logger) (Collector, 
 		runnersBusyCount:   runnersBusyCount,
 		runnersIdleCount:   runnersIdleCount,
 		runnersStatus:      runnersStatus,
-		organizations:      *actionsOrganizations,
-		repositories:       *actionsRepositories,
-		logger:             logger,
 		client:             client,
 		wg:                 &sync.WaitGroup{},
 	}
@@ -87,28 +77,30 @@ func newActionsCollector(client *github.Client, logger *zap.Logger) (Collector, 
 	return c, nil
 }
 
-func (c *actionsCollector) Update(ch chan<- metrics.Metric) error {
-	ctx := context.Background()
-
+func (c *actionsCollector) Update(ctx context.Context, ch chan<- metrics.Metric) error {
 	errCh := make(chan error, 1)
-	for _, org := range strings.Split(c.organizations, ",") {
-		repos := make([]*github.Repository, 0)
-		opts := &github.RepositoryListByOrgOptions{
-			ListOptions: github.ListOptions{
-				PerPage: 100,
-			},
-		}
-		for {
-			results, resp, err := c.client.Repositories.ListByOrg(ctx, org, opts)
-			if err != nil {
-				errCh <- err
-				break
+	for _, org := range viper.GetStringSlice("gh-organizations") {
+		repos := viper.GetStringSlice("gh-repositories")
+		if len(repos) <= 0 {
+			opts := &github.RepositoryListByOrgOptions{
+				ListOptions: github.ListOptions{
+					PerPage: 100,
+				},
 			}
-			repos = append(repos, results...)
-			if resp.NextPage == 0 {
-				break
+			for {
+				results, resp, err := c.client.Repositories.ListByOrg(ctx, org, opts)
+				if err != nil {
+					errCh <- err
+					break
+				}
+				for _, repo := range results {
+					repos = append(repos, repo.GetName())
+				}
+				if resp.NextPage == 0 {
+					break
+				}
+				opts.Page = resp.NextPage
 			}
-			opts.Page = resp.NextPage
 		}
 
 		c.wg.Add(1)
@@ -125,7 +117,7 @@ func (c *actionsCollector) Update(ch chan<- metrics.Metric) error {
 				c.scrapeRepositoryWorkflowRunsByStatus(ctx, ch, errCh, org, repo, "in_progress")
 				c.scrapeRepositoryWorkflowRunsByStatus(ctx, ch, errCh, org, repo, "completed")
 				c.wg.Done()
-			}(*repo.Name)
+			}(repo)
 		}
 	}
 
@@ -220,10 +212,6 @@ func (c *actionsCollector) scrapeWorkflows(ctx context.Context, ch chan<- metric
 		opts.Page = resp.NextPage
 	}
 
-	if workflows == nil {
-		fmt.Println("NIL")
-	}
-
 	state := 0.0
 	for _, workflow := range workflows {
 		if workflow.GetState() == "active" {
@@ -237,5 +225,5 @@ func (c *actionsCollector) scrapeWorkflows(ctx context.Context, ch chan<- metric
 }
 
 func init() {
-	registerCollector("actions", newActionsCollector)
+	registerCollector("actions", true, newActionsCollector)
 }

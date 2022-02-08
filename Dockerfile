@@ -1,8 +1,8 @@
 FROM golang:1.17 as build
 
-ARG GITHUB_PRIVATE_KEY="" \
-    GITHUB_APP_ID="" \
-    GITHUB_INS_ID=""
+ARG GH_PRIVATE_KEY="" \
+    GH_APP_ID="" \
+    GH_INS_ID=""
 
 ENV GO111MODULE=on \
     CGO_ENABLED=0 \

@@ -2,11 +2,12 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,171 +18,186 @@ import (
 	"github.com/konradasb/github_exporter/collectors"
 	"github.com/konradasb/github_exporter/log"
 	"github.com/konradasb/github_exporter/transport"
-	metrics "github.com/prometheus/client_golang/prometheus"
+	"github.com/konradasb/github_exporter/validators"
+	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
 	"go.uber.org/zap"
-	"gopkg.in/alecthomas/kingpin.v2"
-)
-
-const (
-	// defaultLogLevel defines the the default log level severity
-	defaultLogLevel = "debug"
-
-	// defaultWebListenHost defines the default HTTP server listen host
-	defaultWebListenHost = "0.0.0.0"
-
-	// defaultWebListenPort defines the default HTTP server listen port
-	defaultWebListenPort = "9024"
-
-	// defaultCollectors defines the deault enabled collectors
-	defaultCollectors = "actions,ratelimit"
 )
 
 func main() {
-	type options struct {
-		logLevel            string
-		collectors          string
-		webMetricsPath      string
-		webVersionPath      string
-		webHealthzPath      string
-		webListenHost       string
-		webListenPort       string
-		githubPrivateyKey   string
-		githubAppID         int64
-		githubInsID         int64
-		githubOrganizations string
-		githubRepositories  string
-		serverReadTimeout   time.Duration
-		serverIdleTimeout   time.Duration
-		serverWriteTimeout  time.Duration
+	c := &cobra.Command{
+		Use:          "exporter",
+		Short:        "Prometheus exporter for Github metrics.\nWritten in Go, with love ❤️",
+		SilenceUsage: true,
+		Args:         cobra.ExactArgs(0),
 	}
 
-	opts := &options{}
+	c.SetVersionTemplate(build.String())
+	c.Version = build.Version
 
-	kingpin.Flag("log.level", "Output log serverity").Default(defaultLogLevel).Envar("LOG_LEVEL").StringVar(&opts.logLevel)
-	kingpin.Flag("web.listen.host", "Host on which to expose metrics").Default(defaultWebListenHost).Envar("WEB_LISTEN_HOST").StringVar(&opts.webListenHost)
-	kingpin.Flag("web.listen.port", "Port on which to expose metrics").Default(defaultWebListenPort).Envar("WEB_LISTEN_HOST").StringVar(&opts.webListenPort)
-	kingpin.Flag("web.metrics.path", "Path to HTTP metrics").Default("/metrics").Envar("WEB_METRICS_PATH").StringVar(&opts.webMetricsPath)
-	kingpin.Flag("web.healthz.path", "Path to HTTP healthz").Default("/healthz").Envar("WEB_HEALTHZ_PATH").StringVar(&opts.webHealthzPath)
-	kingpin.Flag("web.version.path", "Path to HTTP version").Default("/version").Envar("WEB_VERSION_PATH").StringVar(&opts.webVersionPath)
-	kingpin.Flag("collectors", "List of enabled collectors").Default(defaultCollectors).Envar("COLLECTORS").StringVar(&opts.collectors)
-	kingpin.Flag("server.read-timeout", "Server read timeout duration").Default("30s").Envar("SERVER_READ_TIMEOUT").DurationVar(&opts.serverReadTimeout)
-	kingpin.Flag("server.idle-timeout", "Server idle timeout duration").Default("30s").Envar("SERVER_IDLE_TIMEOUT").DurationVar(&opts.serverIdleTimeout)
-	kingpin.Flag("server.write-timeout", "Server write timeout duration").Default("30s").Envar("SERVER_WRITE_TIMEOUT").DurationVar(&opts.serverWriteTimeout)
-	kingpin.Flag("github.organizations", "Github organizations to scrape").Default("").Envar("GITHUB_ORGANIZATIONS").StringVar(&opts.githubOrganizations)
-	kingpin.Flag("github.repositories", "Github repositories to scrape").Default("").Envar("GITHUB_REPOSITORIES").StringVar(&opts.githubRepositories)
-	kingpin.Flag("github.private-key", "Github App private key (required) (GITHUB_PRIVATE_KEY)").Required().Envar("GITHUB_PRIVATE_KEY").StringVar(&opts.githubPrivateyKey)
-	kingpin.Flag("github.app-id", "Github App application ID (required) (GITHUB_APP_ID)").Required().Envar("GITHUB_APP_ID").Int64Var(&opts.githubAppID)
-	kingpin.Flag("github.ins-id", "Github App instalation ID (required) (GITHUB_INS_ID)").Required().Envar("GITHUB_INS_ID").Int64Var(&opts.githubInsID)
+	// https://github.com/spf13/viper/issues/397
+	cobra.OnInitialize(func() {
+		c.Flags().VisitAll(func(f *pflag.Flag) {
+			if viper.IsSet(f.Name) && viper.GetString(f.Name) != "" {
+				if !f.Changed {
+					c.Flags().Set(f.Name, viper.GetString(f.Name))
+				}
+			}
+		})
+	})
 
-	kingpin.HelpFlag.Short('h')
-	kingpin.Parse()
+	c.Flags().SortFlags = false
 
-	logger, err := log.NewZapLogger(opts.logLevel)
-	if err != nil {
-		fmt.Printf("error initializing logger: %v", err)
-		return
-	}
+	c.Flags().String("host", "0.0.0.0", "Host on which to expose metrics (HOST)")
+	c.Flags().String("port", "9024", "Port on which to expose metrics (PORT)")
+	c.Flags().String("log-level", "debug", "Output log level severity (LOG_LEVEL)")
+	c.Flags().StringSlice("collectors", collectors.Collectors, "List of enabled collectors")
+	c.Flags().String("web-metrics-path", "/metrics", "Path to HTTP metrics (WEB_METRICS_PATH)")
+	c.Flags().String("web-healthz-path", "/healthz", "Path to HTTP healthz (WEB_HEALTHZ_PATH)")
+	c.Flags().String("web-version-path", "/version", "Path to HTTP version (WEB_VERSION_PATH)")
+	c.Flags().StringSlice("gh-organizations", []string{}, "List of Github organizations to scrape (GH_ORGANIZATIONS)")
+	c.Flags().StringSlice("gh-repositories", []string{}, "List of Github repositories to scrape (GH_REPOSITORIES)")
+	c.Flags().String("gh-private-key", "", "Github App Private Key (required) (GH_PRIVATE_KEY)")
+	c.Flags().Int64("gh-app-id", 0, "Github App application ID (required) (GH_APP_ID)")
+	c.Flags().Int64("gh-ins-id", 0, "Github App instalation ID (required) (GH_INS_ID)")
 
-	rt, err := ghinstallation.New(
-		http.DefaultTransport, opts.githubAppID, opts.githubInsID,
-		[]byte(opts.githubPrivateyKey),
-	)
-	if err != nil {
-		fmt.Printf("error initializing Github client transport: %v", err)
-		return
-	}
+	c.Flags().AddFlagSet(collectors.ActionsFlagset)
 
-	client := github.NewClient(
-		&http.Client{
-			Transport: transport.NewTransport(rt, nil),
-		},
-	)
+	c.MarkFlagRequired("gh-private-key")
+	c.MarkFlagRequired("gh-app-id")
+	c.MarkFlagRequired("gh-ins-id")
 
-	c, err := collectors.NewGithubCollector(client, logger)
-	if err != nil {
-		fmt.Printf("error: %v", err)
-		return
-	}
+	viper.BindPFlags(c.Flags())
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_", ".", "_"))
+	viper.AutomaticEnv()
 
-	registry := metrics.NewRegistry()
-	err = registry.Register(c)
-	if err != nil {
-		fmt.Printf("error: %v", err)
-		return
-	}
+	c.RunE = func(cmd *cobra.Command, args []string) error {
+		logger, err := log.NewZapLogger(viper.GetString("log-level"))
+		if err != nil {
+			return errors.Wrap(err, "error initializing logger")
+		}
 
-	template := `
-	<html>
-	<head><title>Github Exporter</title></head>
-	<body>
-	<h1>Github Exporter</h1>
-	<p><a href="` + opts.webMetricsPath + `">Metrics</a></p>
-	</body>
-	</html>
-	`
-
-	router := mux.NewRouter()
-
-	router.Handle(opts.webMetricsPath, promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
-	router.Handle("/", http.HandlerFunc(
-		func(rw http.ResponseWriter, _ *http.Request) {
-			fmt.Fprint(rw, template)
-		}),
-	)
-	router.Handle(opts.webHealthzPath, http.HandlerFunc(
-		func(rw http.ResponseWriter, _ *http.Request) {
-			fmt.Fprint(rw, "OK")
-		}),
-	)
-	router.Handle(opts.webVersionPath, http.HandlerFunc(
-		func(rw http.ResponseWriter, _ *http.Request) {
-			fmt.Fprint(rw, build.String())
-		}),
-	)
-
-	srv := &http.Server{
-		Addr:         fmt.Sprintf("%s:%s", opts.webListenHost, opts.webListenPort),
-		WriteTimeout: opts.serverWriteTimeout,
-		ReadTimeout:  opts.serverReadTimeout,
-		IdleTimeout:  opts.serverIdleTimeout,
-		Handler:      router,
-	}
-
-	shutdown := make(chan os.Signal, 1)
-	signal.Notify(shutdown, syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM)
-
-	go func() {
-		logger.Info(
-			"starting server",
-			zap.String("host", opts.webListenHost),
-			zap.String("port", opts.webListenPort),
-			zap.Error(err),
+		rt, err := ghinstallation.New(
+			http.DefaultTransport, viper.GetInt64("gh-app-id"), viper.GetInt64("gh-ins-id"),
+			[]byte(viper.GetString("gh-private-key")),
 		)
-		err := srv.ListenAndServe()
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Fatal(
-				"error starting server",
-				zap.String("host", opts.webListenHost),
-				zap.String("port", opts.webListenPort),
+		if err != nil {
+			return errors.Wrap(err, "error initializing Github client transport")
+		}
+
+		// TODO: Make this configurable
+		v := validators.NewRegexpValidator(
+			map[*regexp.Regexp]time.Duration{
+				regexp.MustCompile(`\/repos$`):           10 * time.Minute,
+				regexp.MustCompile(`\/workflows$`):       10 * time.Minute,
+				regexp.MustCompile(`\/actions/runners$`): 1 * time.Minute,
+				regexp.MustCompile(`\/actions/runs$`):    5 * time.Minute,
+			},
+		)
+
+		// TODO: Make this configurable
+		transport := transport.NewTransport(rt).
+			WithRatelimit().WithThrottle(nil).WithRevalidation(v).WithCache(nil)
+
+		client := github.NewClient(
+			&http.Client{
+				Transport: transport,
+			},
+		)
+
+		c, err := collectors.NewGithubCollector(client, logger)
+		if err != nil {
+			return err
+		}
+
+		registry := prometheus.NewRegistry()
+		err = registry.Register(c)
+		if err != nil {
+			return err
+		}
+
+		template := `
+		<html>
+		<head><title>Github Exporter</title></head>
+		<body>
+		<h1>Github Exporter</h1>
+		<p><a href="` + viper.GetString("web-metrics-path") + `">Metrics</a></p>
+		</body>
+		</html>
+		`
+
+		router := mux.NewRouter()
+
+		router.Handle(viper.GetString("web-metrics-path"), promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
+		router.Handle("/", http.HandlerFunc(
+			func(rw http.ResponseWriter, _ *http.Request) {
+				fmt.Fprint(rw, template)
+			}),
+		)
+		router.Handle(viper.GetString("web-healthz-path"), http.HandlerFunc(
+			func(rw http.ResponseWriter, _ *http.Request) {
+				fmt.Fprint(rw, "OK")
+			}),
+		)
+		router.Handle(viper.GetString("web-version-path"), http.HandlerFunc(
+			func(rw http.ResponseWriter, _ *http.Request) {
+				fmt.Fprint(rw, build.String())
+			}),
+		)
+
+		srv := &http.Server{
+			Addr:         fmt.Sprintf("%s:%s", viper.GetString("host"), viper.GetString("port")),
+			WriteTimeout: 120 * time.Second,
+			ReadTimeout:  120 * time.Second,
+			IdleTimeout:  120 * time.Second,
+			Handler:      router,
+		}
+
+		shutdown := make(chan os.Signal, 1)
+		signal.Notify(shutdown, syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM)
+
+		go func() {
+			logger.Info(
+				"starting server",
+				zap.String("host", viper.GetString("host")),
+				zap.String("port", viper.GetString("port")),
 				zap.Error(err),
 			)
+			err := srv.ListenAndServe()
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Fatal(
+					"error starting server",
+					zap.String("host", viper.GetString("host")),
+					zap.String("port", viper.GetString("port")),
+					zap.Error(err),
+				)
+			}
+		}()
+
+		<-shutdown
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		err = srv.Shutdown(ctx)
+		if err != nil {
+			logger.Error(
+				"error stopping server",
+				zap.String("host", viper.GetString("host")),
+				zap.String("port", viper.GetString("port")),
+				zap.Error(err),
+			)
+			return err
 		}
-	}()
+		return nil
+	}
 
-	<-shutdown
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	err = srv.Shutdown(ctx)
-	if err != nil {
-		logger.Fatal(
-			"error stopping server",
-			zap.String("host", opts.webListenHost),
-			zap.String("port", opts.webListenPort),
-			zap.Error(err),
-		)
+	if err := c.Execute(); err != nil {
+		os.Exit(1)
 	}
 
 }
